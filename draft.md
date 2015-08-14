@@ -247,6 +247,7 @@ reboot
 ```
 
 This new revision of the driver has 2 RxTx queues, so it allows for 2 CPUs servicing interrupts.
+(Based on [this bug report](http://sourceforge.net/p/e1000/bugs/482/), 2 queues is the hardware limit.)
 
 Using the same technique as above, we achieved the best results by having interrupts handled in separate NUMA domains and by doing RPS on 7 CPUs, each in the same NUMA domain as the CPUs handling the interrupts in that domain.
 
