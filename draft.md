@@ -60,7 +60,7 @@ server {
 ```
 
 ## Initial results
-To our dismay, when running the same benchmark on the Big Amazon Machines™, we could not even go over the **100k QPS mark**, we barely got over the 95 kQPS mark.
+To our dismay, when running the same benchmark on the Big Amazon Machines™, we could not even go over 100k QPS, in fact we barely got over the **95 kQPS** mark.
 That was unexpected...
 
 To understand what was going on, we ran the benchmark a few time and ran `perf top -g -F 99` while it was running.
