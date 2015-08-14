@@ -1,21 +1,21 @@
 
-We have been doing quite a few tests lately to understand what is the maximum number of http queries per second (QPS) that a modern server running a recent linux kernel could handle.
+We have been doing quite a few tests lately to understand what is the maximum number of HTTP queries per second (QPS) that a modern server running Ubuntu 12.04 with a recent Linux kernel could handle.
 
 ![TL;DR image](http://datacratic.com/site/sites/default/files/1m_qps_tldr.png)
 
-In our initial testing on the local dev servers, we were able to reach ~495k QPS.
+In our initial testing on our local bare metal development servers, we were able to reach **~495k QPS**.
 At first sight, this might look like a large number of queries, but we were in fact limited by the bandwidth available on the network.
-These machines have a 1gbps network interface and it was saturated by our test.
+These machines have a 1Gbps network interface and it was saturated by our test.
 
-We set out to reproduce the benchmark on machines which have 10gbps NICs to see how high it would go.
-We booted  big amazon servers (c3.8xlarge) and encountered quite a few issues trying to even match out bare metal numbers...
+We set out to reproduce the benchmark on machines which have 10Gbps NICs to see how high it would go.
+We booted  big Amazon EC2 servers (c3.8xlarge) and encountered quite a few issues trying to even match our bare metal numbers.
 
-The following explains what was done in order to reach ~925k QPS between 2 c3.8xlarge instances on amazon ec2 and how we eventually reached 1364K QPS when using more than one http client and 2 elastic network interfaces.
+The following explains what was done in order to reach ~925k QPS between 2 c3.8xlarge instances on Amazon EC2 and how we eventually reached **~1364k QPS** when using more than one HTTP client and 2 elastic network interfaces.
 
 # Test setup
 The benchmark is very synthetic in nature: the clients are doing as many `GET /` as they can and the server replies with a very small `HTTP 200` response.
 
-The tests were done with c3.8xlarge (HVM) instances on amazon ec2 using the stock ubuntu 12.04 image, but the kernel was upgraded to the latest available at the time: 3.13.0-61.
+The tests were done with c3.8xlarge (HVM) instances on Amazon EC2 using the stock Ubuntu 12.04 image, but the kernel was upgraded to the latest available at the time: 3.13.0-61.
 This distribution is not exactly cutting edge, but that's what we currently deploy in production,
 so we wanted to stick with it to do the tests in order to be discover its limits and to be able to apply configuration tweaks that we might discover.
 
@@ -31,7 +31,7 @@ TRAFFIC: 0 avg bytes, 160 avg overhead, 0 bytes, 3199990880 overhead
 TIMING:  21.629 seconds, 924679 rps, 144481 kbps, 1.1 ms avg req time
 ```
 
-On the server machine, nginx was configured to return small but complete 'HTTP 200' responses from 16 workers.
+On the server machine, nginx was configured to return small but complete `HTTP 200` responses from 16 workers.
 
 ```
 worker_processes 16;
@@ -59,8 +59,8 @@ server {
 }
 ```
 
-# Initial results
-To our dismay, when running the same benchmark on the Big Amazon Machines™, we could not even go over the **100k QPS mark**, we barely got over the 95 kQPS mark.
+## Initial results
+To our dismay, when running the same benchmark on the Big Amazon Machines™, we could not even go over 100k QPS, in fact we barely got over the **95k QPS** mark.
 That was unexpected...
 
 To understand what was going on, we ran the benchmark a few time and ran `perf top -g -F 99` while it was running.
@@ -88,7 +88,9 @@ This showed that ~30% of the machine time was spent in some spinlock in the netw
            do_softirq
 ```
 
-# SR-IOV - Take 1 
+# The Road to 1M QPS
+
+## SR-IOV - Take 1 
 On EC2, there's a feature called *Enhanced Networking* that is supposed to significantly increase the network performance.
 The feature is only available on a few instance type, c3, c4, d2, m4 and r3.
 
@@ -103,7 +105,7 @@ aws ec2 describe-instance-attribute --instance-id instance_id --attribute sriovN
 # no output
 ```
 
-Enabling the feature on ubuntu 12.04 requires a few steps:
+Enabling the feature on Ubuntu 12.04 requires a few steps:
 
 1. The kernel must be upgraded. In our tests we used 3.13.0-61 which was the latest at the time.
 1. Stop the 12.04 instance
@@ -125,7 +127,7 @@ Enabling the feature on ubuntu 12.04 requires a few steps:
 With SR-IOV enabled, we reached **~120k QPS**.
 Better, but still much lower than expected...
 
-# Interrupt Throttling
+## Interrupt Throttling
 When doing the benchmark above, `htop` showed us that 1 CPU was running at 100% in system time.
 
 It turns out that the `ixgbevf` driver has a single receive queue, and thus receive interrupts are handled by a single CPU.
@@ -148,12 +150,12 @@ reboot
 With this feature enabled, we could reach  **~250k QPS**.
 A nice improvement, but still 50% slower than our baseline on bare metal...
 
-# Receive Packet Steering
+## Receive Packet Steering
 One way of achieving high performance in inbound packet processing is by using multiple 'receive queues' in the network drivers when the underlying hardware supports it.
 
 This allows each queue to be assigned to a CPU and thus spread the interrupts load to multiple CPUs.
 
-However, the `ixgbevf` driver does not support this scheme in the version available on ubuntu 12.04 (2.11.3-k - more on this later).
+However, the `ixgbevf` driver does not support this scheme in the version available on Ubuntu 12.04 (2.11.3-k - more on this later).
 
 Some folks at google devised a clever scheme called *Receive Packet Steering* that allows the kernel to emulate this multiqueue behaviour at a layer up in the stack:
 
@@ -203,7 +205,7 @@ All CPUs in same NUMA domain as the interrupts except the one handling interrupt
 *A side note:  we tried using the CPUs in the other NUMA domain and expected to have really bad results. It turns out that the numbers are slightly lower, but it is not nearly as bad as we expected.*
   
 We used `lstopo` to understand what the NUMA topology of our machine was.
-This command is available from the `hwloc` ubuntu package.
+This command is available from the `hwloc` Ubuntu package.
 
 To control all the variables in this test, it is best to manually tell the kernel where the interrupts should go instead of doign guess work:
 
@@ -220,14 +222,14 @@ echo 00000001 > /proc/irq/260/smp_affinity
 echo '000000fe' >/sys/class/net/eth0/queues/rx-0/rps_cpus
 ```
 
-# SR-IOV Take 2
+## SR-IOV Take 2
 670k QPS is great, but we though it could do a bit better.
 
 With the RPS settings listed above, there are 7 + 1 CPUs dedicated to handling network packets, that leaves 24 cores to the applications and they're pretty much idle in our benchmark.
 
 Maybe the newest version of the ixgbevf driver had some performance tweak?
 
-Compiling this driver is relatively straight forward, but because of some symbol mismatch between the ubuntu kernel and what the driver expects, it is not possible to compile versions newer than 2.11.3 on ubuntu 12.04.
+Compiling this driver is relatively straight forward, but because of some symbol mismatch between the Ubuntu kernel and what the driver expects, it is not possible to compile versions newer than 2.11.3 on Ubuntu 12.04.
 This is probably easily solvable by patching the driver's source, but we have not investigated this yet.
  
 To compile and enable the newest (compatible) version of the driver (as per https://gist.github.com/CBarraford/8850424):
@@ -268,14 +270,14 @@ echo '000000fe' >/sys/class/net/eth0/queues/rx-0/rps_cpus
 echo '00fe0000' >/sys/class/net/eth0/queues/rx-1/rps_cpus
 ```
 
-Using this configuration we were able to achieve **926k QPS**.
+Using this configuration we were able to achieve **~925k QPS**.
 
-# Breaking the 1M QPS frontier
+# Breaking the 1M QPS barrier
 ## Multiple Clients
 During the last test above, we saw that the client machine was 100% busy on most of its cores, while the server had ~12 cores mostly free.
 So we thought it would be possible to push the server performance even further by using more than one client.
 
-Indeed, using 2 clients with the same configuration as above, both of them were able to do ~610k QPS, for a total of **~1220kQPS**. Hey we're getting somewhere!
+Indeed, using 2 clients with the same configuration as above, both of them were able to do ~610k QPS, for a total of **~1220k QPS**. Hey we're getting somewhere!
 
 ## Multiple network interfaces on server
 Based on our earlier observations, we knew that the machines were CPU bound and that the hottest spot was the interrupt handling for network interface.
@@ -313,10 +315,12 @@ echo '0000fe00' > /sys/class/net/eth1/queues/rx-0/rps_cpus
 echo 'fe000000' > /sys/class/net/eth1/queues/rx-1/rps_cpus
 ```
 
-With this configuration we reached **~1364k QPS** and all CPU cores were pretty much busy... 
+With this configuration we reached **~1364k QPS** and all CPU cores were pretty much busy.
 
-# Clock source
-By default, in the ubuntu image we use on amazon, the clock source is 'xen', which is somewhat slower than what we find or bare metal machines.
+# Other things we tried
+
+## Clock source
+By default, in the Ubuntu image we use on Amazon, the clock source is 'xen', which is somewhat slower than what we find or bare metal machines.
 
 Since the routines to fetch the time of the day kept showing up pretty high in the perf profiles we took during those benchmarks, we tried changing to the tsc clocksource.
 
@@ -327,17 +331,17 @@ Nonetheless I would recommend to use it:
 echo tsc > /sys/devices/system/clocksource/clocksource0/current_clocksource
 ```
 
-# CPU Pinning
+## CPU Pinning
 We tried to pin nginx workers to sets of CPUs, but no matter how we arranged the CPU mask, we could not get better performance than what we had above.
 
 We have not done extensive testing regarding this technique, but at first sight it doesn't seem very promising. 
 
 Maybe pinning would be more beneficial on the client side? 
 
-# Conclusion
+# Conclusions
 In light of all the tests we did, the best performance for this particular benchmark was achieved using the following configuration:
 
-- c3.8xlarge HVM running ubuntu 12.04
+- c3.8xlarge HVM running Ubuntu 12.04
 - Latest 3.13 kernel available (3.13.0-61)
 - SR-IOV enabled on the instance
 - Latest compatible version of the `ixgbevf` network driver. (2.11.3)
@@ -350,7 +354,7 @@ In light of all the tests we did, the best performance for this particular bench
   - Using 7 CPUs gave the best performance for our benchmark (realworld use will probably differ).
   - The CPU handling the interrupts should NOT be enabled in the CPU bitmask. doing so kills the performance
 
-# Applications in our products
+## Applications in our products
 We do not currently have a need to handle more than 250k QPS on a single server, so it is unlikely that we'll deploy all of these tweaks to our production environment.
 
 Nonetheless, it is quite useful to understand the current limits of the environment and how we could scale it from its current limit of ~70k QPS up to 1M+ QPS.
@@ -362,10 +366,10 @@ We will probably be deploying part of these measures which require minimal effor
 
 That's simple enough and gives an appreciable performance gain.
 
-# Further exploration
+## Further exploration
 
 I'd be really curious to run this benchmark again on the C4.8xlarge instance type. These monsters have 36 cores so we can probably squeeze a bit more performance out of them.
 
-It would also be interresting to test the latest version of the `ixgbevf` driver (2.16.x) to see how it compares to the ancient version available for ubuntu 12.04.
+It would also be interresting to test the latest version of the `ixgbevf` driver (2.16.x) to see how it compares to the ancient version available for Ubuntu 12.04.
 Yes yes... I know, we should upgrade to 14.04, but at this point waiting for 16.04 might be a better time investment.
 Besides, the most recent version don't compile on 14.04 either, it needs a [patch](http://sourceforge.net/p/e1000/mailman/message/33348007/).
