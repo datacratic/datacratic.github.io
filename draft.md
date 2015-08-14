@@ -372,4 +372,4 @@ I'd be really curious to run this benchmark again on the C4.8xlarge instance typ
 
 It would also be interresting to test the latest version of the `ixgbevf` driver (2.16.x) to see how it compares to the ancient version available for Ubuntu 12.04.
 Yes yes... I know, we should upgrade to 14.04, but at this point waiting for 16.04 might be a better time investment.
-Besides, the most recent version don't compile on 14.04 either, it needs a [patch](http://sourceforge.net/p/e1000/mailman/message/33348007/).
+Besides, the most recent versions don't compile on 14.04 either, it seems like it still needs a [patch](http://sourceforge.net/p/e1000/mailman/message/33348007/).
